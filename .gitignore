@@ -1,3 +1,5 @@
 .ipynb_checkpoints/
 nbs.code-workspace
 llm.code-workspace
+
+supplementary/__pycache__
