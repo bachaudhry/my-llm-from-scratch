@@ -3,3 +3,4 @@ nbs.code-workspace
 llm.code-workspace
 
 supplementary/__pycache__
+supplementary/visuals
