@@ -5,3 +5,4 @@ llm.code-workspace
 supplementary/__pycache__
 supplementary/visuals
 temp/
+utils/__pycache__
