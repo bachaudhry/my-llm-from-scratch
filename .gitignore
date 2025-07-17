@@ -2,7 +2,12 @@
 nbs.code-workspace
 llm.code-workspace
 
-supplementary/__pycache__
+supplementary/__pycache__/
+supplementary/utils/__pycache__/
 supplementary/visuals
 temp/
+checkpoints/
 utils/__pycache__
+gpt2-medium-355M.pth
+gpt2-small-124M.pth
+gpt2-small-124M.safetensors
