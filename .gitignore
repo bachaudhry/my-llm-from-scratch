@@ -13,5 +13,7 @@ gpt2-medium-355M.pth
 gpt2-small-124M.pth
 gpt2-small-124M.safetensors
 gpt2-large-774M.pth
+
 .chainlit/
 chainlit.md
+supplementary/user_interface/__pycache__
