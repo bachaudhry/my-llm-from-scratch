@@ -328,15 +328,3 @@ def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses):
     fig.tight_layout()  # Adjust layout to make room
     #plt.savefig("loss-plot.pdf")
     plt.show()
-    
-    
-# Pipeline functions
-def text_to_token_ids(text, tokenizer):
-    encoded = tokenizer.encode(text, allowed_special={'<|endoftext|>'})
-    encoded_tensor = torch.tensor(encoded).unsqueeze(0) # Add batch dimension
-    return encoded_tensor
-
-
-def token_ids_to_text(token_ids, tokenizer):
-    flat = token_ids.squeeze(0) # Removing batch dim
-    return tokenizer.decode(flat.tolist())
