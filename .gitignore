@@ -4,6 +4,7 @@ llm.code-workspace
 
 supplementary/__pycache__/
 supplementary/utils/__pycache__/
+supplementary/utils/__pycache__/components.cpython-311.pyc
 supplementary/visuals
 temp/
 supplementary/temp
