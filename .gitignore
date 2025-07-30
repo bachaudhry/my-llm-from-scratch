@@ -18,3 +18,5 @@ gpt2-large-774M.pth
 .chainlit/
 chainlit.md
 supplementary/user_interface/__pycache__
+
+models/
