@@ -20,3 +20,6 @@ chainlit.md
 supplementary/user_interface/__pycache__
 
 models/
+gpt2/
+
+data/sms_spam_collection
