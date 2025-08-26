@@ -193,7 +193,7 @@ def instantiate_model(choose_model, load_weights):
     model.load_state_dict(torch.load("gpt2/gpt2-medium-355M.pth", weights_only=True))
 
     if load_weights:
-        model = GPTModel(BASE_CONFIG, disable_causal_mask=args.disable_causal_mask)
+        model = GPTModel(BASE_CONFIG, disable_causal_mask=args.disable_causal_mask) # Refer to argparse code at the end of the script
         model_size = choose_model.split(" ")[-1].lstrip("(").rstrip(")")
         settings, params = download_and_load_gpt2(model_size=model_size, models_dir="gpt2")
         load_weights_into_gpt(model, params)
@@ -336,8 +336,221 @@ def evaluate_model(model, train_loader, val_loader, device,
     model.train()
     return train_loss, val_loss
 
+
+def train_classifier_simple(model, train_loader, val_loader, optimizer, device, num_epochs,
+                            eval_freq, eval_iter, max_steps=None, trainable_token_pos=-1,
+                            accumulation_steps=1, ignore_index=-100, average_embeddings=False):
+    # Initialize lists to track losses and tokens seen
+    train_losses, val_losses, train_accs, val_accs = [], [], [], []
+    examples_seen, global_step = 0, -1
+    
+    # Main training loop
+    for epoch in range(num_epochs):
+        model.train()
+        
+        for batch_idx, (input_batch, target_batch) in enumerate(train_loader):
+            loss = calc_loss_batch(
+                input_batch, target_batch, model, device,
+                trainable_token_pos=trainable_token_pos,
+                ignore_index=ignore_index,
+                average_embeddings=average_embeddings
+            )
+            
+            # Use gradient accumulation if accumulation_steps > 1
+            loss /= accumulation_steps
+            loss.backward() 
+            is_update_step = ((batch_idx + 1) % accumulation_steps == 0) or ((batch_idx + 1) == len(train_loader))
+            if is_update_step:
+                optimizer.step()
+                optimizer.zero_grad()
                 
+            examples_seen += input_batch.shape[0]
+            global_step += 1
+            
+            # Optional evaluation step
+            if global_step % eval_freq == 0:
+                train_loss, val_loss = evaluate_model(
+                    model, train_loader, val_loader, device, eval_iter,
+                    trainable_token_pos=trainable_token_pos,
+                    ignore_index=ignore_index,
+                    average_embeddings=average_embeddings
+                )
+                train_losses.append(train_loss)
+                val_loss.append(val_loss)
+                print(f"Ep {epoch+1} (Step {global_step:06d}): "
+                      f"Train loss {train_loss:.3f}, Val loss {val_loss:.3f}")
+                
+            if max_steps is not None and global_step > max_steps:
+                break
+            
+        # Calculate accuracy after each epoch
+        train_accuracy = calc_accuracy_loader(
+            train_loader, model, device, num_batches=eval_iter,
+            trainable_token_pos=trainable_token_pos,
+            average_embeddings=average_embeddings
+        )
+        val_accuracy = calc_accuracy_loader(
+            val_loader, model, device, num_batches=eval_iter,
+            trainable_token_pos=trainable_token_pos, average_embeddings=average_embeddings
+        )
+        print(f"Training accuracy: {train_accuracy*100:.2f}% | ", end="")
+        print(f"Validation accuracy: {val_accuracy*100:.2f}%")
+        train_accs.append(train_accuracy)
+        val_accs.append(val_accuracy)
+        
+        if max_steps is not None and global_step > max_steps:
+            break
+        
+    return train_losses, val_losses, train_accs, val_accs, examples_seen
+
+
+def replace_linear_with_lora(model, rank, alpha, alternative=False):
+    for name, module in model.named_children():
+        if isinstance(module, torch.nn.Linear):
+            # Replace Linear layer with LinearWithLoRA
+            if alternative:
+                setattr(model, name, LinearWithLoRAMerged(module, rank, alpha))
+            else:
+                setattr(model, name, LinearWithLoRA(module, rank, alpha))
+        else:
+            # Recursively apply the same function to child modules
+            replace_linear_with_lora(model, rank, alpha)
                     
 
-            
-        
+if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model_size",
+        type=str,
+        default="gpt2-small (124M)",
+        help=(
+            "Which GPT model to use. Options: 'gpt2-small (124M)', 'gpt2-medium (355M)',"
+            " 'gpt2-large (774M)', 'gpt2-xl (1558M)'."
+        )
+    )
+    parser.add_argument(
+        "--weights",
+        type=str,
+        default="pretrained",
+        help=(
+            "Whether to use 'pretrained' or 'random' weights."
+        )
+    )
+    parser.add_argument(
+        "--trainable_layers",
+        type=str,
+        default="last_block",
+        help=(
+            "Which layers to train. Options: 'all', 'last_block', 'last_two_blocks', 'last_layer,"
+            " 'lora', 'lora_alternative'."
+        )
+    )
+    parser.add_argument(
+        "--trainable_token_pos",
+        type=str,
+        default="last",
+        help=(
+            "which token position to train. Options: 'first', 'last', 'flexible'."
+        )
+    )
+    parser.add_argument(
+        "--average_embeddings",
+        action='store_true',
+        default=False,
+        help=(
+            "Average the output embeddings from all tokens instead of using"
+            " only the embedding at the token position specified by `--trainable_token_pos`."
+        )
+    )
+    parser.add_argument(
+        "--context_length",
+        type=str,
+        default="longest_training_example",
+        help=(
+            "The context length of the data inputs."
+            " Options: 'longest_training_example', 'model_context_length' or integer value."
+        )
+    )
+    parser.add_argument(
+        "--lora_rank",
+        type=int,
+        default=8,
+        help=(
+            "The LoRA rank when choosing `--trainable_layers lora`"
+        )
+    )
+    parser.add_argument(
+        "--lora_alpha",
+        type=int,
+        default=8,
+        help=(
+            "The LoRA alpha value when choosing `--trainable_layers lora`"
+        )
+    )
+    parser.add_argument(
+        "--no_padding",
+        action='store_true',
+        default=False,
+        help=(
+            "Disable padding, i.e. each example may have a different length."
+            " This requires setting `--batch_size 1`."
+        )
+    )
+    parser.add_argument(
+        "--num_epochs",
+        type=int,
+        default=5,
+        help=(
+            "The number of training epochs."
+        )
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=8,
+        help=(
+            "The batch size used for training."
+        )
+    )
+    parser.add_argument(
+        "--accumulation_steps",
+        type=int,
+        default=1,
+        help=(
+            "Accumulation steps to allow for gradient accumulation."
+            " See https://sebastianraschka.com/blog/2023/llm-grad-accumulation.html for explanation."
+            " For example, setting `batch_size=8` and `accumulation_steps=1` compute the exact same"
+            " loss and weight updates as setting `batch_size=1` and `accumulation_steps=8`, however,"
+            " the latter setting uses more iterations."
+        )
+    )
+    parser.add_argument(
+        "--disable_causal_mask",
+        action='store_true',
+        default=False,
+        help=(
+            "Disables the causal attention mask."
+        )
+    )
+    parser.add_argument(
+        "--ignore_index",
+        type=int,
+        default=-100,
+        help=(
+            "Sees the `ignore_index` in the cross-entropy loss."
+        )
+    )
+    
+    args = parser.parse_args()
+    
+    if args.trainable_token_pos == "first":
+        args.trainable_token_pos = 0
+    elif args.trainable_token_pos == "last":
+        args.trainable_token_pos = -1
+    elif args.trainable_token_pos == "flexible": # This setting selects the last tokens before the padding tokens
+        args.trainable_token_pos = "flexible"
+    else:
+        raise ValueError("Invalid --trainable_token_pos argument")
+    
+    
