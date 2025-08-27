@@ -21,8 +21,9 @@ from gpt_download import download_and_load_gpt2
 from components import GPTModel
 from gpt_generate import load_weights_into_gpt
 
-
+########################
 ### --- LoRA layers ---
+########################
 
 class LoRALayer(torch.nn.Module):
     """
@@ -79,7 +80,9 @@ class LinearWithLoRAMerged(torch.nn.Module):
       combined_weight = self.linear.weight + self.lora.alpha * lora.T
       return torch.nn.functional.linear(x, combined_weight, self.linear.bias)
   
+############################
 ### --- Dataset handling ---
+############################
   
 class SpamDataset(Dataset):
     def __init__(self, csv_file, tokenizer, max_length=None, pad_token_id=50256, no_padding=False):
@@ -163,8 +166,9 @@ def create_dataset_csvs(new_file_path):
     validation_df.to_csv("validation.csv", index=None)
     test_df.to_csv("test.csv", index=None)
   
-
-### --- Model pipeline
+##########################
+### --- Model pipeline ---
+##########################
 
 def instantiate_model(choose_model, load_weights):
     """
@@ -417,6 +421,7 @@ def replace_linear_with_lora(model, rank, alpha, alternative=False):
             replace_linear_with_lora(model, rank, alpha)
                     
 
+
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
@@ -553,4 +558,173 @@ if __name__ == "__main__":
     else:
         raise ValueError("Invalid --trainable_token_pos argument")
     
+    ######################
+    ### --- Load Model ---
+    ######################
     
+    if args.weights == "pretrained":
+        load_weights = True
+    elif args.weights  == "random":
+        load_weights = False
+    else:
+        raise ValueError("Invalid --weights argument.")
+    
+    model = instantiate_model(args.model_size, load_weights)
+    for param in model.parameters():
+        param.requires_grad = False
+        
+    if args.model_size == "gpt2-small (124M)":
+        in_features = 768
+    elif args.model_size == "gpt2-medium (355M)":
+        in_features = 1024
+    elif args.model_size == "gpt2-large (774M)":
+        in_features = 1280
+    elif args.model_size == "gpt2-xl (1558M)":
+        in_features = 1600
+    else:
+        raise ValueError("Invalid --model_size argument")
+    
+    torch.manual_seed(42)
+    model.out_head = torch.nn.Linear(in_features=in_features, out_features=2)
+    
+    if args.trainable_layers == "last_layer":
+        pass
+    elif args.trainable_layers == "last_block" or args.trainable_layers == "last_two_blocks":
+        for param in model.trf_blocks[-1].parameters():
+            param.requires_grad = True
+        for param in model.final_norm.parameters():
+            param.requires_grad = True
+        if args.trainable_layers == "last_two_blocks":
+            for param in model.trf_blocks[-2].parameters():
+                param.requires_grad = True
+    elif args.trainable_layers == "all":
+        for param in model.parameters():
+            param.requires_grad = True
+    elif args.trainable_layers in ("lora", "lora_alternative"):
+        if args.trainable_layers == "lora_alternative":
+            alternative = True
+        else:
+            alternative = False
+        replace_linear_with_lora(model, rank=args.lora_rank, alpha=args.lora_alpha, alternative=alternative)
+    else:
+        raise ValueError("Invalid --trainable_layers argument.")
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    
+    #############################
+    # --- Instantiate Dataloaders
+    #############################
+    
+    url = "https://archive.ics.uci.edu/static/public/228/sms+spam+collection.zip"
+    zip_path = "data/sms_spam_collection.zip"
+    extract_to = "data/sms_spam_collection"
+    new_file_path = Path(extract_to) / "SMSSpamCollection.tsv"
+    
+    base_path = Path(".")
+    file_names = ["train.csv", "validation.csv", "test.csv"]
+    all_exist = all((base_path / file_name).exists() for file_name in file_names)
+    
+    if not all_exist:
+        try:
+            download_and_unzip(url, zip_path, extract_to, new_file_path)
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+            print(f"Primary URL failed: {e}. Trying backup URL...")
+            backup_url = "https://f001.backblazeb2.com/file/LLMs-from-scratch/sms%2Bspam%2Bcollection.zip"
+            download_and_unzip(backup_url, zip_path, extract_to, new_file_path)
+        create_dataset_csvs(new_file_path)
+        
+    tokenizer = tiktoken.get_encoding("gpt2")
+    
+    train_dataset = None
+    
+    if args.no_padding:
+        max_length = None
+    else:
+        if args.context_length == "model_context_length":
+            max_length = model.pos_emb.weight.shape[0]
+        elif args.context_length == "longest_training_example":
+            train_dataset = SpamDataset(base_path / "train.csv", max_length=None, tokenizer=tokenizer, no_padding=args.no_padding)
+            max_length = train_dataset.max_length
+        else:
+            try:
+                max_length = int(args.context_length)
+            except ValueError:
+                raise ValueError("Invalid --context_length_argument")
+    
+    if train_dataset is None:
+        train_dataset = SpamDataset(base_path / "train.csv", max_length=max_length, tokenizer=tokenizer, no_padding=args.no_padding)
+    val_dataset = SpamDataset(base_path / "validation.csv", max_length=max_length, tokenizer=tokenizer, no_padding=args.no_padding)
+    test_dataset = SpamDataset(base_path / "test.csv", max_length=max_length, tokenizer=tokenizer, no_padding=args.no_padding)
+    
+    num_workers = -1
+    
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        drop_last=True,
+    )
+    
+    val_loader = DataLoader(
+        dataset=val_dataset,
+        batch_size=args.batch_size,
+        num_workers=num_workers,
+        drop_last=False,
+    )
+    
+    test_loader = DataLoader(
+        dataset=test_dataset,
+        batch_size=args.batch_size,
+        num_workers=num_workers,
+        drop_last=False,
+    )
+    
+    assert train_dataset.max_length <= model.pos_emb.weight.shape[0], (
+        f"Dataset length {train_dataset.max_length} exceeds model's context"
+        f"length {model.pos_emb.weight.shape[0]}. Reinitialize data sets with "
+        f"`max_length={model.pos_emb.weight.shape[0]}`"
+    )
+    
+    ##################################
+    # Train Model
+    ##################################
+    
+    start_time = time.time()
+    torch.manual_seed(42)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, weight_decay=0.1)
+    
+    train_losses, val_losses, train_accs, val_accs, examples_seen = train_classifier_simple(
+        model, train_loader, val_loader, optimizer, device,
+        num_epochs=args.num_epochs, eval_freq=50, eval_iter=5,
+        max_steps=None, trainable_token_pos=args.trainable_token_pos,
+        accumulation_steps=args.accumulation_steps, average_embeddings=args.average_embeddings
+    )
+    
+    end_time = time.time()
+    execution_time_mins = (end_time - start_time) / 60
+    print(f"Training completed in {execution_time_mins:.2f} minutes.")
+    
+    ##################################
+    # Evaluate Model
+    ##################################
+    
+    train_accuracy = calc_accuracy_loader(
+        train_loader, model, device,
+        trainable_token_pos=args.trainable_token_pos,
+        average_embeddings=args.average_embeddings
+    )
+    val_accuracy = calc_accuracy_loader(
+        val_loader, model, device,
+        trainable_token_pos=args.trainable_token_pos,
+        average_embeddings=args.average_embeddings
+    )
+    test_accuracy = calc_accuracy_loader(
+        test_loader, model, device,
+        trainable_token_pos=args.trainable_token_pos, average_embeddings=args.average_embeddings
+    )
+
+    print(f"Training accuracy: {train_accuracy*100:.2f}%")
+    print(f"Validation accuracy: {val_accuracy*100:.2f}%")
+    print(f"Test accuracy: {test_accuracy*100:.2f}%")
