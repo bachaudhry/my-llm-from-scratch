@@ -17,9 +17,12 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
-from gpt_download import download_and_load_gpt2
-from components import GPTModel
-from gpt_generate import load_weights_into_gpt
+from utils.gpt_download import download_and_load_gpt2
+#from gpt_download import download_and_load_gpt2
+from utils.components import GPTModel
+#from components import GPTModel
+from utils.gpt_generate import load_weights_into_gpt
+#from gpt_generate import load_weights_into_gpt
 
 ########################
 ### --- LoRA layers ---
@@ -111,7 +114,13 @@ class SpamDataset(Dataset):
         return len(self.data)
 
     def _longest_encoded_length(self, tokenizer):
-        return max(len(encoded_text) for encoded_text in self.encoded_texts) # Pythonic!! ;)
+        max_length = 0
+        for text in self.data["Text"]:
+            encoded_length = len(tokenizer.encode(text))
+            if encoded_length > max_length:
+                max_length = encoded_length
+        return max_length
+        #return max(len(encoded_text) for encoded_text in self.encoded_texts) # Pythonic!! ;)
       
       
 def download_and_unzip(url, zip_path, extract_to, new_file_path):
@@ -170,7 +179,7 @@ def create_dataset_csvs(new_file_path):
 ### --- Model pipeline ---
 ##########################
 
-def instantiate_model(choose_model, load_weights):
+def instantiate_model(choose_model, load_weights=None):
     """
     Defaults to GPT-2 Medium unless specified.
     """
@@ -201,7 +210,7 @@ def instantiate_model(choose_model, load_weights):
         model_size = choose_model.split(" ")[-1].lstrip("(").rstrip(")")
         settings, params = download_and_load_gpt2(model_size=model_size, models_dir="gpt2")
         load_weights_into_gpt(model, params)
-
+    
     model.eval()
     return model
   
@@ -380,7 +389,7 @@ def train_classifier_simple(model, train_loader, val_loader, optimizer, device, 
                     average_embeddings=average_embeddings
                 )
                 train_losses.append(train_loss)
-                val_loss.append(val_loss)
+                val_losses.append(val_loss)
                 print(f"Ep {epoch+1} (Step {global_step:06d}): "
                       f"Train loss {train_loss:.3f}, Val loss {val_loss:.3f}")
                 
@@ -428,7 +437,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_size",
         type=str,
-        default="gpt2-small (124M)",
+        default="gpt2-medium (355M)",
         help=(
             "Which GPT model to use. Options: 'gpt2-small (124M)', 'gpt2-medium (355M)',"
             " 'gpt2-large (774M)', 'gpt2-xl (1558M)'."
@@ -569,7 +578,7 @@ if __name__ == "__main__":
     else:
         raise ValueError("Invalid --weights argument.")
     
-    model = instantiate_model(args.model_size, load_weights)
+    model = instantiate_model(args.model_size)#, load_weights)
     for param in model.parameters():
         param.requires_grad = False
         
@@ -657,7 +666,7 @@ if __name__ == "__main__":
     val_dataset = SpamDataset(base_path / "validation.csv", max_length=max_length, tokenizer=tokenizer, no_padding=args.no_padding)
     test_dataset = SpamDataset(base_path / "test.csv", max_length=max_length, tokenizer=tokenizer, no_padding=args.no_padding)
     
-    num_workers = -1
+    num_workers = 0
     
     train_loader = DataLoader(
         dataset=train_dataset,
