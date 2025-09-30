@@ -18,11 +18,8 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
 from utils.gpt_download import download_and_load_gpt2
-#from gpt_download import download_and_load_gpt2
 from utils.components import GPTModel
-#from components import GPTModel
 from utils.gpt_generate import load_weights_into_gpt
-#from gpt_generate import load_weights_into_gpt
 
 ########################
 ### --- LoRA layers ---
