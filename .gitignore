@@ -23,3 +23,10 @@ models/
 gpt2/
 
 data/sms_spam_collection
+
+aclImdb/
+aclImdb_v1.tar.gz
+test.csv
+train.csv
+validation.csv
+
