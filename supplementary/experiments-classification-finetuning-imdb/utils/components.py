@@ -101,7 +101,7 @@ class MultiHeadAttention(nn.Module):
         return context_vec
     
     
-    ### Transformer Block, Model and Weight Classes ###
+### Transformer Block, Model and Weight Classes ###
     
 class LayerNorm(nn.Module):
     def __init__(self, emb_dim):
