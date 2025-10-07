@@ -215,4 +215,239 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     
+    ######################################
+    #####          LOAD MODEL        #####
+    ######################################
     
+    torch.manual_seed(42)
+    if args.model == 'distilbert':
+        
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "distilbert-base-uncased", num_labels=2
+        )
+        model.out_head = torch.nn.Linear(in_features=768, out_features=2)
+        for param in model.parameters():
+            param.requires_grad = False
+        if args.trainable_layers == "last_layer":
+            for param in model.out_head.parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "last_block":
+            for param in model.pre_classifier.parameters():
+                param.requires_grad = True
+            for param in model.distilbert.transformer.layer[-1].parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "all":
+            for param in model.parameters():
+                param.requires_grad = True
+        else: 
+            raise ValueError("Invalid --trainable_layers argument.")
+        
+        tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+        
+    elif args.model == "bert":
+        
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "bert-base-uncased", num_labels=2
+        )
+        model.classifier = torch.nn.Linear(in_features=768, out_features=2)
+        for param in model.parameters():
+            param.requires_grad = False
+        if args.trainable_layers == "last_layer":
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "last_block":
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+            for param in model.bert.pooler.dense.parameters():
+                param.requires_grad = True
+            for param in model.bert.encoder.layer[-1].parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "all":
+            for param in model.parameters():
+                param.requires_grad = True
+        else:
+            raise ValueError("Invalid --trainable_layers argument.")
+
+        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        
+    elif args.model == "roberta":
+        
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "FacebookAI/roberta-large", num_labels=2
+        )
+        model.classifier.out_proj = torch.nn.Linear(in_features=1024, out_features=2)
+        for param in model.parameters():
+            param.requires_grad = False
+        if args.trainable_layers == "last_layer":
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "last_block":
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+            for param in model.roberta.encoder.layer[-1].parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "all":
+            for param in model.parameters():
+                param.requires_grad = True
+        else:
+            raise ValueError("Invalid --trainable_layers argument.")
+
+        tokenizer = AutoTokenizer.from_pretrained("FacebookAI/roberta-large")
+        
+    elif args.model in ("modernbert-base", "modernbert-large"):
+
+        if args.model == "modernbert-base":
+            model = AutoModelForSequenceClassification.from_pretrained(
+                "answerdotai/ModernBERT-base", num_labels=2
+            )
+            model.classifier = torch.nn.Linear(in_features=768, out_features=2)
+        else:
+            model = AutoModelForSequenceClassification.from_pretrained(
+                "answerdotai/ModernBERT-large", num_labels=2
+            )
+            model.classifier = torch.nn.Linear(in_features=1024, out_features=2)
+        for param in model.parameters():
+            param.requires_grad = False
+        if args.trainable_layers == "last_layer":
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "last_block":
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+            for param in model.model.layers[-1].parameters():
+                param.requires_grad = True
+            for param in model.head.parameters():
+                param.requires_grad = True
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "all":
+            for param in model.parameters():
+                param.requires_grad = True
+        else:
+            raise ValueError("Invalid --trainable_layers argument.")
+        
+        tokenizer = AutoTokenizer.from_pretrained("answerdotai/ModernBERT-base")
+        
+    elif args.model == "deberta-v3-base":
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "microsoft/deberta-v3-base", num_labels=2
+        )
+        model.classifier = torch.nn.Linear(in_features=768, out_features=2)
+        for param in model.parameters():
+            param.requires_grad = False
+        if args.trainable_layers == "last_layer":
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "last_block":
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+            for param in model.pooler.parameters():
+                param.requires_grad = True
+            for param in model.deberta.encoder.layer[-1].parameters():
+                param.requires_grad = True
+        elif args.trainable_layers == "all":
+            for param in model.parameters():
+                param.requires_grad = True
+        else:
+            raise ValueError("Invalid --trainable_layers argument.")
+
+        tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
+
+    else:
+        raise ValueError("Selected --model {args.model} not supported.")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.eval()
+    
+    ###############################
+    ### Instantiate dataloaders ###
+    ###############################
+
+    base_path = Path("~/data")
+
+    if args.use_attention_mask.lower() == "true":
+        use_attention_mask = True
+    elif args.use_attention_mask.lower() == "false":
+        use_attention_mask = False
+    else:
+        raise ValueError("Invalid argument for `use_attention_mask`.")
+
+    train_dataset = IMDBDataset(
+        base_path / "train.csv",
+        max_length=256,
+        tokenizer=tokenizer,
+        pad_token_id=tokenizer.pad_token_id,
+        use_attention_mask=use_attention_mask
+    )
+    val_dataset = IMDBDataset(
+        base_path / "validation.csv",
+        max_length=256,
+        tokenizer=tokenizer,
+        pad_token_id=tokenizer.pad_token_id,
+        use_attention_mask=use_attention_mask
+    )
+    test_dataset = IMDBDataset(
+        base_path / "test.csv",
+        max_length=256,
+        tokenizer=tokenizer,
+        pad_token_id=tokenizer.pad_token_id,
+        use_attention_mask=use_attention_mask
+    )
+
+    num_workers = 0
+    batch_size = 8
+
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        drop_last=True,
+    )
+
+    val_loader = DataLoader(
+        dataset=val_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        drop_last=False,
+    )
+
+    test_loader = DataLoader(
+        dataset=test_dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        drop_last=False,
+    )
+
+    ###############################
+    ####       Train model     ####
+    ###############################
+
+    start_time = time.time()
+    torch.manual_seed(42)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.1)
+
+    train_losses, val_losses, train_accs, val_accs, examples_seen = train_classifier_simple(
+        model, train_loader, val_loader, optimizer, device,
+        num_epochs=args.num_epochs, eval_freq=50, eval_iter=20,
+        max_steps=None
+    )
+
+    end_time = time.time()
+    execution_time_minutes = (end_time - start_time) / 60
+    print(f"Training completed in {execution_time_minutes:.2f} minutes.")
+
+    ###############################
+    ####     Evaluate model    ####
+    ###############################
+
+    print("\nEvaluating on the full datasets ...\n")
+
+    train_accuracy = calc_accuracy_loader(train_loader, model, device)
+    val_accuracy = calc_accuracy_loader(val_loader, model, device)
+    test_accuracy = calc_accuracy_loader(test_loader, model, device)
+
+    print(f"Training accuracy: {train_accuracy*100:.2f}%")
+    print(f"Validation accuracy: {val_accuracy*100:.2f}%")
+    print(f"Test accuracy: {test_accuracy*100:.2f}%")

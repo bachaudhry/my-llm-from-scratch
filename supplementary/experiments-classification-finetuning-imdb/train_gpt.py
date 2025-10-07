@@ -329,7 +329,7 @@ if __name__ == "__main__":
     else:
         raise ValueError("Invalid --model_size argument")
 
-    torch.manual_seed(123)
+    torch.manual_seed(42)
     model.out_head = torch.nn.Linear(in_features=in_features, out_features=2)
 
     if args.trainable_layers == "last_layer":
