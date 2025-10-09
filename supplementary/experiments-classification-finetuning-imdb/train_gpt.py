@@ -68,7 +68,7 @@ def instantiate_model(choose_model, load_weights):
     BASE_CONFIG.update(model_configs[choose_model])
 
     if not load_weights:
-        torch.manual_seed(123)
+        torch.manual_seed(42)
     model = GPTModel(BASE_CONFIG)
 
     if load_weights:
@@ -407,7 +407,7 @@ if __name__ == "__main__":
     ###############################
 
     start_time = time.time()
-    torch.manual_seed(123)
+    torch.manual_seed(42)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=0.1)
 
     train_losses, val_losses, train_accs, val_accs, examples_seen = train_classifier_simple(
