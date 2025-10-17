@@ -451,3 +451,7 @@ if __name__ == "__main__":
     print(f"Training accuracy: {train_accuracy*100:.2f}%")
     print(f"Validation accuracy: {val_accuracy*100:.2f}%")
     print(f"Test accuracy: {test_accuracy*100:.2f}%")
+    
+    # Print additional metrics
+    
+    
