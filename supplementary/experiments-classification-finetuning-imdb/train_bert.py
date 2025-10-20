@@ -2,6 +2,8 @@
 #   - https://www.manning.com/books/build-a-large-language-model-from-scratch
 # Code: https://github.com/rasbt/LLMs-from-scratch
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import argparse
 from pathlib import Path
@@ -213,6 +215,12 @@ if __name__ == "__main__":
             "Learning rate setting."
         )
     )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=4,
+        help="NUmber of subprocesses to use for dataloading"
+    )
     args = parser.parse_args()
     
     ######################################
@@ -364,7 +372,7 @@ if __name__ == "__main__":
     ### Instantiate dataloaders ###
     ###############################
 
-    base_path = Path("~/data")
+    base_path = Path("data/")
 
     if args.use_attention_mask.lower() == "true":
         use_attention_mask = True
@@ -395,28 +403,27 @@ if __name__ == "__main__":
         use_attention_mask=use_attention_mask
     )
 
-    num_workers = 0
-    batch_size = 8
+    batch_size = 8 # Adjust based on local system setup
 
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers,
+        num_workers=args.num_workers,
         drop_last=True,
     )
 
     val_loader = DataLoader(
         dataset=val_dataset,
         batch_size=batch_size,
-        num_workers=num_workers,
+        num_workers=args.num_workers,
         drop_last=False,
     )
 
     test_loader = DataLoader(
         dataset=test_dataset,
         batch_size=batch_size,
-        num_workers=num_workers,
+        num_workers=args.num_workers,
         drop_last=False,
     )
 
