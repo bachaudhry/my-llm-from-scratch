@@ -18,6 +18,7 @@ gpt2-large-774M.pth
 .chainlit/
 chainlit.md
 supplementary/user_interface/__pycache__
+supplementary/experiments-classification-finetuning-imdb/utils/__pycache__/
 
 models/
 gpt2/
@@ -29,4 +30,6 @@ aclImdb_v1.tar.gz
 test.csv
 train.csv
 validation.csv
+
+TODO.txt
 
