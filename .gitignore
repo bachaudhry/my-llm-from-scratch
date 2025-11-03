@@ -22,7 +22,7 @@ supplementary/experiments-classification-finetuning-imdb/utils/__pycache__/
 
 models/
 gpt2/
-
+data/
 data/sms_spam_collection
 
 aclImdb/
