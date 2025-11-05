@@ -4,6 +4,7 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 from torch.utils.data import Dataset, DataLoader
+from utils.gpt_generate import text_to_token_ids, token_ids_to_text
 
 
 class GPTDatasetV1(Dataset):
