@@ -111,3 +111,5 @@ The reason why we are not seeing such a big saving as in the plots above is 2-fo
 
 1. I use a smaller configuration to have the model finish the generation in a reasonable time.
 2. More importantly, we are looking at the whole model here, not just the attention mechanism; the fully-connected layers in the model take up most of the memory (but this is a topic for a separate analysis).
+
+* [First-principles GQA notes and diagrams](GQA_DESIGN_NOTES.md) — detailed forward-pass walkthrough, tensor shape tables, and Mermaid flow diagrams
