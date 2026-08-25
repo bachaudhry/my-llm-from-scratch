@@ -2,6 +2,8 @@
 #   - https://www.manning.com/books/build-a-large-language-model-from-scratch
 # Code: https://github.com/rasbt/LLMs-from-scratch
 
+# See GQA_DESIGN_NOTES.md for a first-principles walkthrough with flow diagrams.
+
 import argparse
 import time
 import tiktoken
@@ -12,6 +14,48 @@ import torch.nn as nn
 # Grouped Query Attention
 ###################################
 class GroupedQueryAttention(nn.Module):
+    """
+    Grouped-Query Attention (GQA).
+
+    GQA is an interpolation between Multi-Head Attention (MHA) and
+    Multi-Query Attention (MQA).  The `num_heads` query heads are partitioned
+    into `num_kv_groups` groups; all heads inside a group share a single Key
+    and Value map.  This preserves most of MHA's representational capacity
+    while shrinking the KV cache during autoregressive decoding by a factor
+    of num_heads / num_kv_groups.
+
+    Two structural invariants (enforced in __init__):
+        d_out % num_heads == 0          → head_dim = d_out // num_heads
+        num_heads % num_kv_groups == 0  → group_size = num_heads // num_kv_groups
+
+    Projections (asymmetric output dims -- the crux of GQA):
+        W_query:  Linear(d_in, d_out)                     = num_heads * head_dim
+        W_key:    Linear(d_in, num_kv_groups * head_dim)
+        W_value:  Linear(d_in, num_kv_groups * head_dim)
+    Only the query projection is full width; K/V projections are proportional
+    to the number of groups, not heads.
+
+    Forward algorithm:
+        1. Project X to queries, keys, values.
+        2. Reshape each to (b, head/group, T, head_dim).
+        3. Optionally maintain a KV cache (grow along the token axis, dim=2).
+        4. Broadcast K/V to the query-head count via
+           repeat_interleave(group_size, dim=1) so head group `g` gets
+           copies of group `g`'s K/V -- no cross-group mixing.
+        5. Compute Q @ K^T, apply a causal mask, scale by 1/sqrt(head_dim),
+           softmax, and dropout.
+        6. Multiply by V, reshape back to (b, T, d_out), and apply the
+           optional out_proj.
+
+    KV cache semantics: when use_cache=True, K/V are appended token-by-token
+    and the causal mask uses a running query-position pointer so the newest
+    token attends only to earlier rows.  Calling reset_cache() clears the
+    cache and the position counter.
+
+    See GQA_DESIGN_NOTES.md for the full forward-pass flowchart, Mermaid
+    diagrams, and a step-by-step shape walkthrough.
+    """
+
     def __init__(
         self, d_in, d_out, dropout, num_heads, num_kv_groups, dtype=None, qkv_bias=False
     ):
