@@ -42,7 +42,7 @@ class MultiHeadAttentionWithSWA(nn.Module):
         # Unroll the last dim: (b, tokens, d_out) -> (b, num_tokens, num_heads, head_dim)
         keys_new = keys_new.view(b, num_tokens, self.num_heads, self.head_dim)
         values_new = values_new.view(b, num_tokens, self.num_heads, self.head_dim)
-        queries_new = queries.view(b, num_tokens, self.num_heads, self.head_dim)
+        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
         
         ### KV cache related
         if use_cache:
@@ -59,11 +59,11 @@ class MultiHeadAttentionWithSWA(nn.Module):
                 # For chunked prefill, we need up to W-1 older keys plus the whole
                 # current chunk. Earliest queries in the chunk keep their full 
                 # sliding window.
-                attn_keep = min(keys.size(1), self.sliding_window_size + num_tokens - 1)
+                attn_keep = min(keys.size(1), self.sliding_window_size + num_tokens - 1) # Keys the current attention matmul sees
                 keys = keys[:, -attn_keep:, :, :]
                 values = values[:, -attn_keep:, :, :]
                 
-                cache_keep = min(combined_k.size(1), self.sliding_window_size)
+                cache_keep = min(combined_k.size(1), self.sliding_window_size) # No. of keys stored for the next call
                 self.cache_k = combined_k[:, -cache_keep:, :, :]
                 self.cache_v = combined_v[:, -cache_keep:, :, :]
             else:
@@ -83,7 +83,7 @@ class MultiHeadAttentionWithSWA(nn.Module):
         # Compute scaled dot-product attention with a causal mask
         attn_scores = queries @ keys.transpose(2, 3) # Dot product for each head
         
-        # Causal sliding window mask
+        ############## Causal Sliding Window Mask ##################
         num_tokens_Q = queries.shape[-2]
         num_tokens_K = keys.shape[-2]
         device = queries.device
