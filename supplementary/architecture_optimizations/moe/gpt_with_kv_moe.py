@@ -139,9 +139,16 @@ class FeedForward(nn.Module):
     
 
 class MoEFeedForward(nn.Module):
+    """Sparse Mixture-of-Experts FFN: routes each token to its top-k
+    experts and combines their outputs, weighted by gate scores.
+    """
+
     def __init__(self, cfg):
+        """Build a shared linear gate plus per-expert SwiGLU FFN blocks
+        (fc1/fc2 upsample emb_dim -> hidden_dim; fc3 projects back).
+        """
         super().__init__()
-        self.num_experts_per_tok = cfg["num_experts_per_token"]
+        self.num_experts_per_tok = cfg["num_experts_per_tok"]
         self.num_experts = cfg["num_experts"]
         self.emb_dim = cfg["emb_dim"]
         
@@ -166,45 +173,56 @@ class MoEFeedForward(nn.Module):
         )
         
     def forward(self, x):
+        """Route x (batch, seq_len, emb_dim) through its top-k experts.
+
+        Flow:
+        1. Gate: scores = gate(x)       -> (b, seq_len, num_experts)
+        2. Keep the top-k scores per token; softmax -> gating weights
+        3. Flatten tokens to (b*seq_len, emb_dim); zero the output buffer
+        4. Per distinct selected expert: gather its assigned tokens via
+           mask, run them through the expert's SwiGLU block, and
+           index_add_ the output scaled by each token's gate weight
+        5. Reshape the buffer back to (batch, seq_len, emb_dim)
+        """
         # x:  (batch, seq_len, emb_dim)
-        scores = self.gate(x), # (b, seq_len, num_experts)
-        topk_scores, topk_indices = torch.topk(scores, self.num_experts_per_tok, dim=-1)
-        topk_probs = torch.softmax(topk_scores, dim=-1)
+        scores = self.gate(x)  # gate logits: (b, seq_len, num_experts)
+        topk_scores, topk_indices = torch.topk(scores, self.num_experts_per_tok, dim=-1)  # top-k experts per token
+        topk_probs = torch.softmax(topk_scores, dim=-1)  # normalize top-k logits into gating weights
         
         batch, seq_len, _ = x.shape
-        x_flat = x.reshape(batch * seq_len, -1)
-        out_flat = torch.zeros(batch * seq_len, self.emb_dim, device=x.device, dtype=x.dtype)
+        x_flat = x.reshape(batch * seq_len, -1)  # (N, emb_dim), N = batch * seq_len
+        out_flat = torch.zeros(batch * seq_len, self.emb_dim, device=x.device, dtype=x.dtype)  # buffer for weighted expert outputs
         
-        topk_indices_flat = topk_indices.reshape(-1, self.num_experts_per_tok)
-        topk_probs_flat = topk_probs.reshape(-1, self.num_experts_per_tok)
+        topk_indices_flat = topk_indices.reshape(-1, self.num_experts_per_tok)  # (N, k) expert ids
+        topk_probs_flat = topk_probs.reshape(-1, self.num_experts_per_tok)      # (N, k) weights
         
-        unique_experts = torch.unique(topk_indices_flat)
+        unique_experts = torch.unique(topk_indices_flat)  # experts actually selected by any token
         
         for expert_id_tensor in unique_experts:
-            expert_id = int(expert_id_tensor.item())
+            expert_id = int(expert_id_tensor.item())  # current expert
             
-            mask = topk_indices_flat == expert_id
+            mask = topk_indices_flat == expert_id  # (N, k): slots assigned to this expert
             if not mask.any():
-                continue
+                continue  # expert unused, skip
             
-            token_mask = mask.any(dim=-1)
-            selected_idx = token_mask.nonzero(as_tuple=False).squeeze(-1)
+            token_mask = mask.any(dim=-1)  # tokens routed to this expert
+            selected_idx = token_mask.nonzero(as_tuple=False).squeeze(-1)  # their flat indices
             if selected_idx.numel() == 0:
                 continue
             
-            expert_input = x_flat.index_select(0, selected_idx)
+            expert_input = x_flat.index_select(0, selected_idx)  # gather the routed tokens
             hidden = torch.nn.functional.silu(self.fc1[expert_id](expert_input)) * self.fc2[
                 expert_id
-            ](expert_input)
-            expert_out = self.fc3[expert_id](hidden)
+            ](expert_input)  #### SwiGLU up-projection
+            expert_out = self.fc3[expert_id](hidden)  # down-project to emb_dim
             
-            mask_selected = mask[selected_idx]
-            slot_indices = mask_selected.int().argmax(dim=-1, keepdim=True)
+            mask_selected = mask[selected_idx]  # per-token slot mask
+            slot_indices = mask_selected.int().argmax(dim=-1, keepdim=True)  # slot used by each token
             selected_probs = torch.gather(
                 topk_probs_flat.index_select(0, selected_idx), dim=-1, index=slot_indices
-            ).squeeze(-1)
+            ).squeeze(-1)  # each token's weight for this expert
             
-            out_flat.index_add_(0, selected_idx, expert_out * selected_probs.unsqueeze(-1))
+            out_flat.index_add_(0, selected_idx, expert_out * selected_probs.unsqueeze(-1))  # accumulate weight-scaled outputs
             
         return out_flat.reshape(batch, seq_len, self.emb_dim)
     
@@ -215,7 +233,7 @@ class TransformerBlock(nn.Module):
         self.att = MultiHeadAttention(
             d_in=cfg["emb_dim"],
             d_out=cfg["emb_dim"],
-            num_heads=cfg["num_heads"],
+            num_heads=cfg["n_heads"],
             dropout=cfg["drop_rate"],
             qkv_bias=cfg["qkv_bias"],
         )
@@ -285,7 +303,7 @@ class GPTModel(nn.Module):
         pos_embeds = self.pos_emb(pos_ids).unsqueeze(0)
         ##################################
         
-        x = self.tok_embeds + pos_embeds # [b, num_tokens, emb_size]
+        x = tok_embeds + pos_embeds # [b, num_tokens, emb_size]
         x = self.drop_emb(x)
         
         ########## KV Cache #################
@@ -311,7 +329,7 @@ def generate_text_simple_cached(model, idx, max_new_tokens,
     batch_size, base_len = idx.shape
     total_len = base_len + max_new_tokens 
     generated = torch.empty(
-        batch_size, total_len, dtype=idx.stype, device=idx.device
+        batch_size, total_len, dtype=idx.dtype, device=idx.device
     )
     generated[:, :base_len] = idx
     cur_len = base_len
@@ -364,8 +382,8 @@ def generate_text_simple_cached(model, idx, max_new_tokens,
         max_ffn_mem = max(MOE_FF_MEM_BYTES)
         
         def to_mb(bytes_val):
-                    return bytes_val / (1024 ** 2)
-                print(f"Avg MoE FF mem delta/call: {to_mb(avg_ffn_mem):.2f} MB (max {to_mb(max_ffn_mem):.2f} MB)")
+            return bytes_val / (1024 ** 2)
+        print(f"Avg MoE FF mem delta/call: {to_mb(avg_ffn_mem):.2f} MB (max {to_mb(max_ffn_mem):.2f} MB)")
         
     return generated[:, :cur_len]
         
