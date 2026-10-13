@@ -1,39 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
 .ipynb_checkpoints/
+
+# VS Code workspace files
 nbs.code-workspace
 llm.code-workspace
 
-supplementary/__pycache__/
-supplementary/utils/__pycache__/
-supplementary/utils/__pycache__/components.cpython-311.pyc
+# Directories / misc
 supplementary/visuals
 temp/
 supplementary/temp
 checkpoints/
-utils/__pycache__
+.chainlit/
+chainlit.md
+
+# Model weights
 gpt2-medium-355M.pth
 gpt2-small-124M.pth
 gpt2-small-124M.safetensors
 gpt2-large-774M.pth
 
-.chainlit/
-chainlit.md
-supplementary/user_interface/__pycache__
-supplementary/experiments-classification-finetuning-imdb/utils/__pycache__/
-
+# Downloadable data
 models/
 gpt2/
 data/
 data/sms_spam_collection
 
+# Dataset artifacts
 aclImdb/
 aclImdb_v1.tar.gz
 test.csv
 train.csv
 validation.csv
 
+# Project notes
 TODO.txt
-
-supplementary/utils/__pycache__/components.cpython-311.pyc
-supplementary/utils/__pycache__/components.cpython-311.pyc
-supplementary/architecture_optimizations/gqa/__pycache__/
-
