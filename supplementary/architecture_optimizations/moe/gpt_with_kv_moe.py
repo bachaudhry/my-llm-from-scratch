@@ -189,16 +189,17 @@ class MoEFeedForward(nn.Module):
         topk_scores, topk_indices = torch.topk(scores, self.num_experts_per_tok, dim=-1)  # top-k experts per token
         topk_probs = torch.softmax(topk_scores, dim=-1)  # normalize top-k logits into gating weights
         
+        # Flatten to per token rows
         batch, seq_len, _ = x.shape
         x_flat = x.reshape(batch * seq_len, -1)  # (N, emb_dim), N = batch * seq_len
         out_flat = torch.zeros(batch * seq_len, self.emb_dim, device=x.device, dtype=x.dtype)  # buffer for weighted expert outputs
-        
+        # Flatten the routing tables
         topk_indices_flat = topk_indices.reshape(-1, self.num_experts_per_tok)  # (N, k) expert ids
         topk_probs_flat = topk_probs.reshape(-1, self.num_experts_per_tok)      # (N, k) weights
         
         unique_experts = torch.unique(topk_indices_flat)  # experts actually selected by any token
         
-        for expert_id_tensor in unique_experts:
+        for expert_id_tensor in unique_experts: # Gather, compute and scatter per expert
             expert_id = int(expert_id_tensor.item())  # current expert
             
             mask = topk_indices_flat == expert_id  # (N, k): slots assigned to this expert
@@ -211,9 +212,8 @@ class MoEFeedForward(nn.Module):
                 continue
             
             expert_input = x_flat.index_select(0, selected_idx)  # gather the routed tokens
-            hidden = torch.nn.functional.silu(self.fc1[expert_id](expert_input)) * self.fc2[
-                expert_id
-            ](expert_input)  #### SwiGLU up-projection
+            #### SwiGLU up-projection
+            hidden = torch.nn.functional.silu(self.fc1[expert_id](expert_input)) * self.fc2[expert_id](expert_input)  
             expert_out = self.fc3[expert_id](hidden)  # down-project to emb_dim
             
             mask_selected = mask[selected_idx]  # per-token slot mask
@@ -224,7 +224,7 @@ class MoEFeedForward(nn.Module):
             
             out_flat.index_add_(0, selected_idx, expert_out * selected_probs.unsqueeze(-1))  # accumulate weight-scaled outputs
             
-        return out_flat.reshape(batch, seq_len, self.emb_dim)
+        return out_flat.reshape(batch, seq_len, self.emb_dim) # unflatten
     
     
 class TransformerBlock(nn.Module):
