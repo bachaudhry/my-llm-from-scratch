@@ -24,6 +24,7 @@ import torch.nn as nn
 #   https://huggingface.co/deepseek-ai/DeepSeek-V3.2-Exp/blob/main/inference/model.py
 
 
+
 class LightningIndexer(nn.Module):
     """Lightweight module that scores every past token for each incoming query.
 
@@ -47,7 +48,7 @@ class LightningIndexer(nn.Module):
         self.index_head_dim = index_head_dim
         
         # Project input to indexer query vectors: (d_model -> index_n_heads * index_head_dim)
-        self.W_q_index = nn.Linear(d_model, index_n_heads, * index_head_dim, bias=False)
+        self.W_q_index = nn.Linear(d_model, index_n_heads * index_head_dim, bias=False)
         # Project input to shared key vectors: (d_model -> index_head_dim)
         self.W_k_index = nn.Linear(d_model, index_head_dim, bias=False)
         # Learn a per-head weight scalar: (d_model -> index_n_heads) 
@@ -135,7 +136,7 @@ class MultiHeadAttentionWithDSA(nn.Module):
         self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
-        self.out_proj = nn.Linear(d_in, d_out)
+        self.out_proj = nn.Linear(d_out, d_out)
         self.dropout = nn.Dropout(dropout)
         
         self.indexer = LightningIndexer(d_in, index_n_heads, index_head_dim)
@@ -152,7 +153,7 @@ class MultiHeadAttentionWithDSA(nn.Module):
         self.cache_k = None
         self.cache_v = None
         self.cache_x = None
-        self.ptr.current_pos = 0
+        self.ptr_current_pos = 0
         
     def forward(self, x: torch.Tensor, use_cache: bool=False) -> torch.Tensor:
         b, num_tokens, d_in = x.shape
@@ -185,7 +186,7 @@ class MultiHeadAttentionWithDSA(nn.Module):
         else:
             keys = keys_new
             values = values_new
-            x_ctx = 0
+            x_ctx = x
             q_start = 0
             k_start = 0
             
