@@ -461,7 +461,7 @@ With `use_cache=False` the intended `x_ctx` is simply `x` (query set = context s
 
 ## Compute and memory analysis
 
-### Dense-mask teaching implementation vs. hypothetical fused kernel
+### Dense-mask teaching implementation vs. hypothetical fused kernel (Assuming a 12GB VRAM Consumer Card)
 
 Per attention layer, prefill, batch 1, `d = d_out = 768`, `d_I·H_I = 256`, `k = 64`:
 
@@ -520,22 +520,6 @@ def reset_cache(self):
 - All **three** buffers are invalidated together — forgetting `cache_x` while resetting K/V would silently desync the indexer's context from the attention context.
 - Buffers are registered `persistent=False`, so they move with `.to(device)` / `.to(dtype)` but never enter `state_dict` checkpoints.
 - Called once per generation run (see integration); a fresh prompt starts from a clean slate.
-
----
-
-## Errata & differences from the reference
-
-This `gpt_with_kv_dsa.py` working copy contains a few transcription slips relative to the reference implementation (`LLMs-from-scratch/ch04/09_dsa/gpt_with_kv_dsa.py`) that **break execution** in parts of the code. The design notes above describe the intended behavior. The concrete fixes:
-
-| Line | As written | Intended | Symptom if unfixed |
-|---|---|---|---|
-| 50 | `nn.Linear(d_model, index_n_heads, * index_head_dim, bias=False)` | `nn.Linear(d_model, index_n_heads * index_head_dim, bias=False)` | **SyntaxError on import** (stray `, *`). |
-| 155 | `self.ptr.current_pos = 0` | `self.ptr_current_pos = 0` | `AttributeError` on `reset_cache` — `ptr` does not exist. |
-| 188 | `x_ctx = 0` (no-cache branch) | `x_ctx = x` | `TypeError` on any `use_cache=False` forward: `W_k_index` receives an `int 0` instead of a tensor. The training / full-forward path is broken. |
-| 138 | `self.out_proj = nn.Linear(d_in, d_out)` | mirror sibling: `nn.Linear(d_out, d_out)` | Behaviorally identical for every config in this repo (`d_in == d_out`), but worth flagging as a divergence from the reference. |
-
----
-
 ## References
 
 - DeepSeek-V3.2 model card & technical report: https://huggingface.co/deepseek-ai/DeepSeek-V3.2
