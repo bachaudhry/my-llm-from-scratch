@@ -23,7 +23,7 @@ class MultiHeadAttentionWithKVSharing(nn.Module):
         self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.out_proj = nn.Linear(d_out, d_out)
-        self.W_query = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(dropout)
         
         ######### KV Cache ############
         self.register_buffer("cache_k", None, persistent=False)
@@ -54,7 +54,7 @@ class MultiHeadAttentionWithKVSharing(nn.Module):
                     self.cache_v = torch.cat([self.cache_v, values_new], dim=1)
                 keys, values = self.cache_k, self.cache_v
             else:
-                keys, values, keys_new, values_new
+                keys, values = keys_new, values_new
                 if self.cache_k is not None or self.cache_v is not None:
                     self.reset_cache()
             
@@ -183,3 +183,169 @@ class TransformerBlock(nn.Module):
         x = x + shortcut  # Add the original input back
 
         return x, new_shared_kv
+    
+    
+class GPTModel(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        if not 1 <= cfg["n_kv_producing_layers"] <= cfg["n_layers"]:
+            raise ValueError("n_kv_producing_layers must be between 1 and n_layers.")
+        
+        self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
+        self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
+        self.drop_emb = nn.Dropout(cfg["drop_rate"])
+        
+        # self.trf_blocks = nn.Sequential(
+        #    *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
+        ####################################################
+        #  KV cache-related
+        self.trf_blocks = nn.ModuleList(
+            [TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
+        self.n_kv_producing_layers = cfg["n_kv_producing_layers"]
+        self.current_pos = 0
+        ####################################################
+
+        self.final_norm = LayerNorm(cfg["emb_dim"])
+        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
+
+    def forward(self, in_idx, use_cache=False):
+        batch_size, seq_len = in_idx.shape
+        tok_embeds = self.tok_emb(in_idx)
+
+        # pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
+
+        ####################################################
+        #  KV cache-related
+        if use_cache:
+            pos_ids = torch.arange(self.current_pos, self.current_pos + seq_len, device=in_idx.device, dtype=torch.long)
+            self.current_pos += seq_len
+        else:
+            pos_ids = torch.arange(0, seq_len, device=in_idx.device, dtype=torch.long)
+        pos_embeds = self.pos_emb(pos_ids).unsqueeze(0)
+        ####################################################
+
+        x = tok_embeds + pos_embeds  # Shape [batch_size, num_tokens, emb_size]
+        x = self.drop_emb(x)
+
+        # x = self.trf_blocks(x)
+        ####################################################
+        # KV cache-related
+        shared_kv = None
+        for layer_idx, blk in enumerate(self.trf_blocks):
+            if layer_idx < self.n_kv_producing_layers:
+                x, shared_kv = blk(x, use_cache=use_cache, shared_kv=None)
+            else:
+                x, _ = blk(x, use_cache=use_cache, shared_kv=shared_kv)
+        ####################################################
+
+        x = self.final_norm(x)
+        logits = self.out_head(x)
+        return logits
+
+    ####################################################
+    # KV cache-related
+    def reset_kv_cache(self):
+        for blk in self.trf_blocks:
+            blk.att.reset_cache()
+        self.current_pos = 0
+    ####################################################
+        
+        
+def generate_text_simple_cached(model, idx, max_new_tokens,
+                                context_size=None, use_cache=True):
+    model.eval()
+    ctx_len = context_size or model.pos_emb.num_embeddings
+
+    with torch.no_grad():
+        if use_cache:
+            # Init cache with full prompt
+            model.reset_kv_cache()
+            logits = model(idx[:, -ctx_len:], use_cache=True)
+
+            for step in range(max_new_tokens):
+                # a) pick the token with the highest log-probability (greedy sampling)
+                next_idx = logits[:, -1].argmax(dim=-1, keepdim=True)
+                # b) append it to the running sequence
+                idx = torch.cat([idx, next_idx], dim=1)
+                # c) feed model only the new token
+                if step + 1 < max_new_tokens:  # Skips the forward pass after the last token is generated
+                    logits = model(next_idx, use_cache=True)
+        else:
+            for _ in range(max_new_tokens):
+                logits = model(idx[:, -ctx_len:], use_cache=False)
+                next_idx = logits[:, -1].argmax(dim=-1, keepdim=True)
+                idx = torch.cat([idx, next_idx], dim=1)
+
+    return idx
+        
+        
+def main():
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        description="Run GPT with cross-layer KV sharing.",
+    )
+    parser.add_argument("--emb_dim", type=int, default=768, help="Model embedding dimension.")
+    parser.add_argument("--n_heads", type=int, default=12, help="Number of attention heads.")
+    parser.add_argument("--n_layers", type=int, default=12, help="Number of transformer blocks.")
+    parser.add_argument("--n_kv_producing_layers", type=int, default=6,
+                        help="Number of early layers that compute and cache their own K/V tensors.")
+    parser.add_argument("--max_new_tokens", type=int, default=200, help="Number of tokens to generate.")
+    args = parser.parse_args()
+
+    start_context = "Hello, I am"
+    tokenizer = tiktoken.get_encoding("gpt2")
+    encoded = tokenizer.encode(start_context)
+
+    GPT_CONFIG_124M = {
+        "vocab_size": 50257,        # Vocabulary size
+        "context_length": args.max_new_tokens + len(encoded),
+        "emb_dim": args.emb_dim,    # Embedding dimension
+        "n_heads": args.n_heads,    # Number of attention heads
+        "n_layers": args.n_layers,  # Number of layers
+        "drop_rate": 0.0,           # Dropout rate
+        "qkv_bias": False,          # Query-Key-Value bias
+        "n_kv_producing_layers": args.n_kv_producing_layers,
+    }
+    torch.manual_seed(123)
+    model = GPTModel(GPT_CONFIG_124M)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device, dtype=torch.bfloat16)
+    model.eval()  # disable dropout
+
+    encoded_tensor = torch.tensor(encoded, device=device).unsqueeze(0)
+    print(f"\n{50*'='}\n{22*' '}IN\n{50*'='}")
+    print("\nInput text:", start_context)
+    print("Encoded input text:", encoded)
+    print("encoded_tensor.shape:", encoded_tensor.shape)
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start = time.time()
+
+    token_ids = generate_text_simple_cached(
+        model=model,
+        idx=encoded_tensor,
+        max_new_tokens=args.max_new_tokens,
+    )
+
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    total_time = time.time() - start
+
+    decoded_text = tokenizer.decode(token_ids.squeeze(0).tolist())
+
+    print(f"\n\n{50*'='}\n{22*' '}OUT\n{50*'='}")
+    print("\nOutput:", token_ids)
+    print("Output length:", len(token_ids[0]))
+    print("Output text:", decoded_text)
+
+    print(f"\nTime: {total_time:.2f} sec")
+    print(f"{int(len(token_ids[0])/total_time)} tokens/sec")
+    if torch.cuda.is_available():
+        max_mem_bytes = torch.cuda.max_memory_allocated()
+        max_mem_gb = max_mem_bytes / (1024 ** 3)
+        print(f"Max memory allocated: {max_mem_gb:.2f} GB")
+
+
+if __name__ == "__main__":
+    main()
